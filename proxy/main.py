@@ -3,6 +3,8 @@ import logging
 from server import CustomThreadingHTTPServer
 from proxy_handler import CustomProxyRequestHandler
 from cert_manager import generate_certs
+from savepacket import save_packet_to_json  # 추가된 부분
+import atexit  # 추가된 부분
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(formatter_class=argparse.ArgumentDefaultsHelpFormatter)
@@ -32,4 +34,8 @@ if __name__ == "__main__":
 
     httpd = CustomHTTPServer((args.bind, args.port), handler)
     logging.info(f"Serving HTTP on {args.bind} port {args.port} (http://{args.bind}:{args.port}/) ...")
+
+    # 서버 종료 시 패킷 저장
+    atexit.register(lambda: save_packet_to_json(CustomProxyRequestHandler.packet_storage))
+
     httpd.serve_forever()
