@@ -3,7 +3,6 @@ import urllib.parse
 
 def save_packet_to_json(packet_storage, output_file='packets.json'):
     packets = []
-
     for raw_data in packet_storage:
         try:
             request_line, headers_alone = raw_data.split(b'\r\n', 1)

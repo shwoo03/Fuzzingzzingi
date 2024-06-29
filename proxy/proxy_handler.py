@@ -203,6 +203,7 @@ def handle_get(proxy_handler):
     # 추가된 로그 출력
     display_info(request, request_body, response, response_body_plain)
 
+
 def relay_streaming(proxy_handler, response):
     proxy_handler.send_response_only(response.status, response.reason)
     for key, value in response.headers.items():
