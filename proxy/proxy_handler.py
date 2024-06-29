@@ -98,9 +98,12 @@ class CustomProxyRequestHandler(BaseHTTPRequestHandler):
                         data = s.recv(8192)
                         if not data:
                             return
+                        print(f"[+] {s} !!")
                         if s is conns[0]:
+                            print(11111)
                             conns[1].sendall(data)
                         else:
+                            print(22222)
                             conns[0].sendall(data)
                         # 패킷 데이터 저장
                         logging.debug(f"Packet data: {data[:100]}")  # 첫 100 바이트 로그 출력
@@ -318,3 +321,4 @@ def display_info(request, request_body, response, response_body):
 
         if response_body_text:
             print(with_color(32, "==== RESPONSE BODY ====\n%s\n" % response_body_text))
+
