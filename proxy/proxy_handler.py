@@ -103,9 +103,11 @@ class CustomProxyRequestHandler(BaseHTTPRequestHandler):
                         else:
                             conns[0].sendall(data)
                         # 패킷 데이터 저장
+                        logging.debug(f"Packet data: {data[:100]}")  # 첫 100 바이트 로그 출력
                         CustomProxyRequestHandler.packet_storage.append(data)
         except Exception as e:
             logging.error(f"Error in _read_write: {str(e)}")
+
 
     def relay_streaming(self, response):
         self.send_response_only(response.status, response.reason)
