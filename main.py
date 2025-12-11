@@ -1,162 +1,116 @@
-# class file_download:
-#
-#     def __init__(self, ):
+import json
+import os
+import subprocess
+import threading
+from pathlib import Path
+from typing import Optional
 
-import socket
-import time
-from urllib.parse import urlparse
-from scrapy.crawler import CrawlerProcess
-from scrapy.utils.project import get_project_settings
-from crawler.spiders.crawler import MySpider
-# from proxy.certificate_manager import create_certificate, update_nginx_config
-# from Myproject.Myproject.items import PacketFromDB
-# from Myproject.Myproject.spiders.go_to_fuzzer import SendToFuzzer
-# from server import PacketLoggerServer
-from fuzzers.command_injection.commandimain import command_injection
-from fuzzers.sql_injection.sqlimain import sqli_get_option, sql
-from fuzzers.ssrf.ssrfmain import ssrf_get_option, ssrf
-from fuzzers.file_download.filedownloadmain import file_download
-from fuzzers.xss.XSS import xss
+from flask import Flask, jsonify, request, send_from_directory
+
+ROOT = Path(__file__).resolve().parent
+UI_DIST = ROOT / "ui" / "dist"
+
+app = Flask(__name__, static_folder=str(UI_DIST), static_url_path="/")
+
+CRAWL_THREAD: Optional[threading.Thread] = None
+LAST_COMMAND: Optional[str] = None
+LAST_ERROR: Optional[str] = None
+OUTPUT_FILE = ROOT / "output.txt"
+DB_PATH = ROOT / "data" / "crawl.db"
 
 
-def connect_server():
+def build_crawl_command(start_url: str, proxy_url: str, depth: int, cookies_file: Optional[str]):
+    args = [
+        "scrapy",
+        "runspider",
+        "crawler/spiders/crawler.py",
+        "-a",
+        f"start_url={start_url}",
+        "-a",
+        f"proxy_url={proxy_url}",
+        "-a",
+        f"max_depth={depth}",
+        "-s",
+        "LOG_LEVEL=INFO",
+    ]
+    if cookies_file:
+        args.extend(["-a", f"cookies_file={cookies_file}"])
+    return args
+
+
+def run_crawl(start_url: str, proxy_url: str, depth: int, cookies_file: Optional[str]):
+    global LAST_COMMAND, LAST_ERROR
+    cmd = build_crawl_command(start_url, proxy_url, depth, cookies_file)
+    LAST_COMMAND = " ".join(cmd)
+    LAST_ERROR = None
+    OUTPUT_FILE.write_text("", encoding="utf-8")
     try:
-        server_ip = "13.209.63.65"
-        server_port = 8888
-        client_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)  # IPv4, TCP
-        client_socket.connect((server_ip, server_port))
-        print("Porxy Connected")
-    except Exception as e:
-        print("Failed to connect to server:", e)
+        result = subprocess.run(cmd, check=False, text=True, capture_output=True, cwd=ROOT)
+        if result.returncode != 0:
+            LAST_ERROR = result.stderr.strip() or f"크롤러 오류 (코드 {result.returncode})"
+    except Exception as exc:  # pylint: disable=broad-except
+        LAST_ERROR = f"크롤 실행 실패: {exc}"
 
-# def extract_domain(url):
-#     parsed_url = urlparse(url)
-#     domain = parsed_url.netloc
-#     return domain
 
-def display_menu(options):
-    print("======================================================================")
-    print("Select option to toggle (ON/OFF):")
-    for i, (option, status) in enumerate(options.items(), start=1):
-        status_str = "ON" if status else "OFF"
-        print(f"{i}. {option} [{status_str}]")
-    print(f"{len(options) + 1}. ALL")
-    print("0. Exit")
-    print("======================================================================")
+def start_crawl_thread(start_url: str, proxy_url: str, depth: int, cookies_file: Optional[str]):
+    global CRAWL_THREAD
+    if CRAWL_THREAD and CRAWL_THREAD.is_alive():
+        return False
+    CRAWL_THREAD = threading.Thread(
+        target=run_crawl,
+        args=(start_url, proxy_url, depth, cookies_file),
+        daemon=True,
+    )
+    CRAWL_THREAD.start()
+    return True
 
-def execute_option(option_name):
-    if option_name == "xss":
-        xss()
-    elif option_name == "sql_injection":
-        sqli_get_option()
-    elif option_name == "SSRF":
-        ssrf_get_option()
-    elif option_name == "Command Injection":
-        command_injection()
-    elif option_name == "File Download Vulnerabilities":
-        file_download()
-    else:
-        print(f"Invalid option: {option_name}")
 
-def toggle_option(options, choice):
-    if choice == len(options) + 1:  # Toggle ALL options
-        all_on = all(options.values())
-        for key in options:
-            options[key] = not all_on
-    
-        xss()
-        sql()
-        ssrf()
-        command_injection()
-        file_download()
+@app.route("/api/crawl", methods=["POST"])
+def api_crawl():
+    data = request.get_json(force=True)
+    start_url = (data.get("startUrl") or "").strip()
+    proxy_url = (data.get("proxyUrl") or "none").strip()
+    depth = int(data.get("depth") or 3)
+    cookies_file = (data.get("cookiesFile") or "").strip() or None
 
-    elif choice > 0 and choice <= len(options):
-        option_name = list(options.keys())[choice - 1]
-        options[option_name] = not options[option_name]
+    if not start_url:
+        return jsonify({"ok": False, "error": "startUrl이 필요합니다."}), 400
 
-        if option_name:
-            execute_option(option_name)
-            options[option_name] = not options[option_name]
+    started = start_crawl_thread(start_url, proxy_url, depth, cookies_file)
+    if not started:
+        return jsonify({"ok": False, "error": "이미 크롤러가 실행 중입니다."}), 409
+
+    return jsonify({"ok": True, "message": "크롤링을 시작했습니다.", "command": LAST_COMMAND})
+
+
+@app.route("/api/status", methods=["GET"])
+def api_status():
+    running = CRAWL_THREAD.is_alive() if CRAWL_THREAD else False
+    return jsonify(
+        {
+            "running": running,
+            "last_command": LAST_COMMAND,
+            "last_error": LAST_ERROR,
+            "output_file": str(OUTPUT_FILE),
+            "db_path": str(DB_PATH),
+        }
+    )
+
+
+@app.route("/", defaults={"path": ""})
+@app.route("/<path:path>")
+def serve_ui(path):
+    if UI_DIST.exists():
+        if path and (UI_DIST / path).exists():
+            return send_from_directory(UI_DIST, path)
+        return send_from_directory(UI_DIST, "index.html")
+    return jsonify({"message": "UI가 아직 빌드되지 않았습니다. `cd ui && npm run build` 후 다시 시도하세요."}), 503
+
 
 def main():
-    print("======================================================================")
-    print('''
-    ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⣀⣀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀
-    ⠀⠀⠀⠀⠀⢀⣠⣤⣶⠾⠟⠛⠛⠛⠛⠛⠛⠻⠷⣶⣤⣄⡀⠀⠀⠀⠀⠀
-    ⠀⠀⠀⣠⡾⠟⠋⠁⠀⠀⠀⠀⢀⣀⣀⡀⠀⠀⠀⠀⠈⠙⠻⢷⣄⠀⠀⠀
-    ⠀⢀⣾⠋⠀⠀⠀⠀⠶⠶⠿⠛⠛⠛⠛⠛⠛⠿⠶⠶⠀⠀⠀⠀⠙⣷⡀⠀
-    ⠀⣿⠃⠀⠀⠀⠀⠀⢀⣠⣤⣤⡀⠀⠀⢀⣤⣤⣄⡀⠀⠀⠀⠀⠀⠘⣿⠀
-    ⠘⣿⠀⠀⠀⠀⠀⢠⣿⣿⣿⣿⣿⣧⣼⣿⣿⣿⣿⣿⡄⠀⠀⠀⠀⠀⣿⠃
-    ⠀⠻⣧⠀⠀⠀⠀⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⣿⠀⠀⠀⠀⣼⠟⠀
-    ⠀⠀⠙⢷⣄⡀⠘⣿⠛⠛⣿⡟⠛⢻⡟⠛⢻⣿⠛⠛⣿⠁⢀⣠⡾⠋⠀⠀
-    ⠀⠀⠀⠀⠉⠻⢷⣿⣧⠀⠉⠁⣠⡿⢿⣄⠈⠉⠀⣼⣿⡾⠟⠉⠀⠀⠀⠀
-    ⠀⠀⠀⠀⠀⠀⠀⠀⢹⣷⣶⣾⡟⠀⠀⢻⣷⣶⣾⡏⠀⠀⠀⠀⠀⠀⠀⠀
-    ⠀⠀⠀⠀⠀⠀⣀⣀⣸⣿⢀⣿⠁⠀⠀⠈⣿⡀⣿⣇⣀⣀⠀⠀⠀⠀⠀⠀
-    ⠀⠀⠀⠀⣴⡟⠋⢉⣉⣀⣸⡏⠀⠀⠀⠀⢹⣇⣀⣉⡉⠙⢻⣦⠀⠀⠀⠀
-    ⠀⠀⠀⠀⣿⡀⠘⠛⠛⠉⣹⣷⠀⠀⠀⠀⣾⣏⠉⠛⠛⠃⢀⣿⠀⠀⠀⠀
-    ⠀⠀⠀⠀⠘⠻⠷⠾⠛⠛⠛⠛⢷⣤⣤⡾⠛⠛⠛⠛⠷⠾⠟⠃⠀⠀⠀⠀
-    ⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠀⠈⠁⠀⠀
-    ''')
+    port = int(os.environ.get("PORT", "5000"))
+    app.run(host="0.0.0.0", port=port, debug=False)
 
-    print("Hello, this is Fuzzingzzingi")
-    print("This fuzzer is a program developed together by WHS 2nd class trainees.")
-    print("======================================================================\n")
-    time.sleep(0.7)
 
-    # URL 입력 받기
-    print("Please enter the target URL")
-    target_url = input("> ")
-    print("Please enter the login URL")
-    login_url = input("> ")
-    print("Please enter the username")
-    username = input("> ")
-    print("Please enter the password")
-    password = input("> ")
-    
-    # 도메인 추출
-    # domain = extract_domain(target_url)
-
-    # 인증서 생성 및 Nginx 설정 업데이트
-    # key_file, crt_file = create_certificate(domain)
-    # update_nginx_config(domain, key_file, crt_file)
-    
-    connect_server()
-    
-    # Scrapy 크롤러 프로세스 시작
-    # process = CrawlerProcess(get_project_settings())
-    # process.crawl(MySpider, start_url=target_url, login_url = login_url, username = username, password = password)  # MySpider 클래스의 이름을 사용
-    # process.start()
-
-    # 취약점 옵션 선택
-    options = {
-    "xss": False,
-    "sql_injection": False,
-    "SSRF": False,
-    "Command Injection": False,
-    # "File Upload Vulnerabilities": False,
-    "File Download Vulnerabilities": False
-    }
-
-    while True:
-        time.sleep(2)
-        display_menu(options)
-        time.sleep(0.5)
-        try:
-            choice = int(input("Enter your choice: "))
-            if choice == 0:
-                print("Exiting...")
-                break
-            toggle_option(options, choice)
-        except ValueError:
-            print("Invalid input. Please enter a number.")
-        except Exception as e:
-            print(f"An error occurred: {e}")
-                          
-    # 보고서 기능 구현
-
-    # 오류 처리 기능 및 로깅 기능 구현
-
-if __name__ == '__main__':
+if __name__ == "__main__":
     main()
-    # server = PacketLoggerServer()
-    # server.run()

@@ -1,41 +1,43 @@
-# Scrapy 설정 (크롤러 실행 시 프로젝트 단위 설정이 필요한 경우 사용)
+"""
+Scrapy + Playwright 기본 설정.
+runspider로 실행 시 스파이더의 custom_settings가 우선 적용됩니다.
+"""
+
+import os
 
 BOT_NAME = "fuzzingzzingi"
 
 SPIDER_MODULES = ["crawler.spiders"]
 NEWSPIDER_MODULE = "crawler.spiders"
 
-USER_AGENT = "FuzzingzzingiCrawler/0.1 (+https://example.com)"
+USER_AGENT = "FuzzingzzingiCrawler/0.2 (+https://example.com)"
 ROBOTSTXT_OBEY = False
 LOG_LEVEL = "INFO"
 
 DOWNLOAD_TIMEOUT = 30
-CONCURRENT_REQUESTS = 16
-DOWNLOAD_DELAY = 1
-CONCURRENT_REQUESTS_PER_DOMAIN = 8
-CONCURRENT_REQUESTS_PER_IP = 8
+CONCURRENT_REQUESTS = 32
+DOWNLOAD_DELAY = 0.5
+CONCURRENT_REQUESTS_PER_DOMAIN = 16
+CONCURRENT_REQUESTS_PER_IP = 16
 
-# 기본 프록시 (스파이더 인자에서 덮어쓸 수 있습니다)
-PROXY = "http://127.0.0.1:8080"
+# 프록시는 스파이더 인자나 환경변수 HTTP_PROXY/HTTPS_PROXY로 주입합니다. (기본값: 사용 안 함)
+PROXY = os.environ.get("HTTP_PROXY", "")
 
-# DOWNLOADER_MIDDLEWARES에 Selenium을 넣지 않았습니다.
-# 현재는 스파이더 내부 BrowserSession을 사용하므로 중복 제어를 피하기 위함입니다.
-DOWNLOADER_MIDDLEWARES = {
-    "scrapy.downloadermiddlewares.httpproxy.HttpProxyMiddleware": 1,
+TWISTED_REACTOR = "twisted.internet.asyncioreactor.AsyncioSelectorReactor"
+DOWNLOAD_HANDLERS = {
+    "http": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
+    "https": "scrapy_playwright.handler.ScrapyPlaywrightDownloadHandler",
 }
+PLAYWRIGHT_BROWSER_TYPE = "chromium"
+PLAYWRIGHT_DEFAULT_NAVIGATION_TIMEOUT = 30_000
+PLAYWRIGHT_LAUNCH_OPTIONS = {"headless": True}
 
-# MySQL 설정 (현재 파이프라인 비활성화)
-MYSQL_HOST = "13.209.63.65"
-MYSQL_DATABASE = "Fuzzingzzingi"
-MYSQL_USER = "zzingzzingi"
-MYSQL_PASSWORD = "!Ru7eP@ssw0rD!12"
+# SQLite 경로 (환경변수 SQLITE_PATH로 덮어쓰기 가능)
+SQLITE_PATH = os.environ.get("SQLITE_PATH", "data/crawl.db")
 
-# ITEM_PIPELINES는 기본적으로 꺼 둡니다. (DB 연동 필요 시 활성화)
-ITEM_PIPELINES = {
-    # "crawler.spiders.pipelines.DuplicateURLPipeline": 100,
-}
+# ITEM_PIPELINES는 스파이더 custom_settings에서 활성화됨
 
 AUTOTHROTTLE_ENABLED = True
-AUTOTHROTTLE_START_DELAY = 5
-AUTOTHROTTLE_MAX_DELAY = 60
-AUTOTHROTTLE_TARGET_CONCURRENCY = 1.0
+AUTOTHROTTLE_START_DELAY = 1
+AUTOTHROTTLE_MAX_DELAY = 30
+AUTOTHROTTLE_TARGET_CONCURRENCY = 2.0
