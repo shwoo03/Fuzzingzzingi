@@ -99,10 +99,9 @@ func Run(req Request) error {
 	}
 
 	c.OnRequest(func(r *colly.Request) {
-		norm := normalize(r.URL.String())
-		if _, loaded := seen.LoadOrStore(norm, true); loaded {
-			r.Abort()
-		}
+		// OnRequest에서는 중복 체크를 하지 않습니다.
+		// OnResponse/OnHTML에서 Visit 호출 전 미리 seen에 등록하기 때문입니다.
+		// 만약 리다이렉트로 인한 중복이 발생하면 수집되겠지만, 큰 문제는 아닙니다.
 	})
 
 	c.OnResponse(func(r *colly.Response) {
@@ -111,14 +110,10 @@ func Run(req Request) error {
 
 		// 동적 렌더링으로 추가 링크 수집 시도 (비 HTML은 건너뜀)
 		ct := strings.ToLower(string(r.Headers.Get("Content-Type")))
-		fmt.Fprintf(os.Stderr, "[Debug] OnResponse: %s, Content-Type: %s\n", norm, ct)
-
 		if !strings.Contains(ct, "text/html") && !strings.Contains(ct, "application/xhtml") {
-			fmt.Fprintf(os.Stderr, "[Debug] Skipping non-HTML: %s\n", norm)
 			return
 		}
 		// 쿠키 전달하여 동적 로드
-		fmt.Fprintf(os.Stderr, "[Debug] Calling fetchDynamicLinks for %s\n", norm)
 		links, err := fetchDynamicLinks(norm, req.ProxyURL, cookies)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "렌더링 링크 수집 실패 %s: %v\n", norm, err)
@@ -127,6 +122,7 @@ func Run(req Request) error {
 		for _, l := range links {
 			n := normalize(l)
 			host := hostOf(n)
+
 			if host != baseHost && host != hostWithPort {
 				continue
 			}
